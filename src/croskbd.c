@@ -35,12 +35,51 @@ TabletSwitchDevice tdev = {
 	.fd = -1,
 	.tablet_mode = 0,
 };
+TouchpadDevice pdev = {
+	.fd = -1,
+};
 UInputDevice udev = {.fd = -1};
 
 void cleanup() {
 	dbg("Exiting...");
-	close_dev_fds(&kdev, &tdev);
+	close_dev_fds(&kdev, &tdev, &pdev);
 	uinput_teardown(&udev);
+}
+
+void handle_tablet_mode_change(int tablet_mode) {
+	if (tablet_mode) {
+		dbg("Entering tablet mode - disabling keyboard and touchpad");
+		// In tablet mode, completely ungrab keyboard (disable all input)
+		if (kdev.fd > 0) {
+			int ret = ioctl(kdev.fd, EVIOCGRAB, 0);
+			if (ret != 0) {
+				err("Failed to ungrab keyboard: %s", strerror(errno));
+			}
+		}
+		// Grab (disable) touchpad
+		if (pdev.fd > 0) {
+			int ret = ioctl(pdev.fd, EVIOCGRAB, 1);
+			if (ret != 0) {
+				err("Failed to grab touchpad: %s", strerror(errno));
+			}
+		}
+	} else {
+		dbg("Entering laptop mode - enabling keyboard and touchpad");
+		// In laptop mode, grab keyboard for remapping (normal operation)
+		if (kdev.fd > 0) {
+			int ret = ioctl(kdev.fd, EVIOCGRAB, 1);
+			if (ret != 0) {
+				err("Failed to grab keyboard: %s", strerror(errno));
+			}
+		}
+		// Ungrab (enable) touchpad
+		if (pdev.fd > 0) {
+			int ret = ioctl(pdev.fd, EVIOCGRAB, 0);
+			if (ret != 0) {
+				err("Failed to ungrab touchpad: %s", strerror(errno));
+			}
+		}
+	}
 }
 
 void input_loop(void) {
@@ -74,6 +113,12 @@ void input_loop(void) {
 		}
 		if (pfds[1].revents) {
 			read(tdev.fd, &ts_ev, sizeof(ts_ev));
+			// Process tablet switch events
+			if (settings.handle_tablet_switch && ts_ev.type == EV_SW &&
+				ts_ev.code == SW_TABLET_MODE) {
+				tdev.tablet_mode = ts_ev.value;
+				handle_tablet_mode_change(tdev.tablet_mode);
+			}
 		}
 		if (pfds[0].revents) {
 			int ret = read(kdev.fd, &kb_ev, sizeof(kb_ev));
@@ -110,12 +155,30 @@ int main(int argc, char **argv) {
 	}
 
 	input_device dev = {};
+	input_device ts_dev = {};
+	input_device tp_dev = {};
 
 	uinput_init(&udev);
 
 	if (udev.fd < 0) {
 		err("Failed to create virtual keyboard");
 		return 1;
+	}
+
+	// Initialize tablet switch device if tablet mode handling is enabled
+	if (settings.handle_tablet_switch) {
+		if (get_tablet_switch(&ts_dev)) {
+			tdev.fd = ts_dev.fd;
+		} else {
+			warn("Tablet switch device not found");
+		}
+
+		// Initialize touchpad device
+		if (get_touchpad(&tp_dev)) {
+			pdev.fd = tp_dev.fd;
+		} else {
+			warn("Touchpad device not found");
+		}
 	}
 
 	while (1) {

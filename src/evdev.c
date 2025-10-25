@@ -109,11 +109,14 @@ int get_keyboards(input_device *dev) {
 	return 0;
 }
 
-void close_dev_fds(KeyboardDevice *kdev, TabletSwitchDevice *tdev) {
+void close_dev_fds(KeyboardDevice *kdev, TabletSwitchDevice *tdev,
+				   TouchpadDevice *pdev) {
 	if (kdev->fd > 0)
 		close(kdev->fd);
 	if (tdev->fd > 0)
 		close(tdev->fd);
+	if (pdev->fd > 0)
+		close(pdev->fd);
 }
 
 void load_kb_layout_data(KeyboardDevice *kdev) {
@@ -143,4 +146,126 @@ void load_kb_layout_data(KeyboardDevice *kdev) {
 		if (kdev->kbd_caps & KEYBD_CAP_ASSISTANT_KEY)
 			dbg("KEYBD_CAP_ASSISTANT_KEY");
 	}
+}
+
+int get_touchpad(input_device *dev) {
+	DIR *directory;
+	struct dirent *entry;
+
+	directory = opendir("/dev/input/");
+	if (!directory) {
+		err("Failed to read /dev/input/: %s", strerror(errno));
+		return 0;
+	}
+
+	while ((entry = readdir(directory))) {
+		if (entry->d_name[0] != 'e')
+			continue;
+
+		char event_name[10] = {0};
+		snprintf(event_name, sizeof(event_name), "%.9s", entry->d_name);
+
+		char path[32] = {0};
+		snprintf(path, sizeof(path), "/dev/input/%s", event_name);
+
+		int fd = open(path, O_RDWR);
+		if (fd < 0)
+			continue;
+
+		char name[256] = {0};
+		if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
+			close(fd);
+			continue;
+		}
+
+		// Convert name to lowercase for case-insensitive comparison
+		char name_lower[256] = {0};
+		for (int i = 0; i < 256 && name[i]; i++) {
+			name_lower[i] =
+				name[i] >= 'A' && name[i] <= 'Z' ? name[i] + 32 : name[i];
+		}
+
+		// Check if device name contains "touchpad" or "trackpad"
+		if (strstr(name_lower, "touchpad") || strstr(name_lower, "trackpad")) {
+			// Verify it has INPUT_PROP_POINTER property
+			unsigned char prop_bits[INPUT_PROP_MAX / 8 + 1] = {0};
+			if (ioctl(fd, EVIOCGPROP(sizeof(prop_bits)), prop_bits) >= 0) {
+				if (prop_bits[INPUT_PROP_POINTER / 8] &
+					(1 << (INPUT_PROP_POINTER % 8))) {
+					dev->fd = fd;
+					snprintf(dev->event_name, sizeof(dev->event_name), "%s",
+							 event_name);
+					closedir(directory);
+					dbg("Found touchpad: %s (%s)", name, event_name);
+					return 1;
+				}
+			}
+		}
+
+		close(fd);
+	}
+
+	closedir(directory);
+	return 0;
+}
+
+int get_tablet_switch(input_device *dev) {
+	DIR *directory;
+	struct dirent *entry;
+
+	directory = opendir("/dev/input/");
+	if (!directory) {
+		err("Failed to read /dev/input/: %s", strerror(errno));
+		return 0;
+	}
+
+	while ((entry = readdir(directory))) {
+		if (entry->d_name[0] != 'e')
+			continue;
+
+		char event_name[10] = {0};
+		snprintf(event_name, sizeof(event_name), "%.9s", entry->d_name);
+
+		char path[32] = {0};
+		snprintf(path, sizeof(path), "/dev/input/%s", event_name);
+
+		int fd = open(path, O_RDONLY);
+		if (fd < 0)
+			continue;
+
+		// Check if device supports EV_SW events
+		unsigned char ev_bits[EV_MAX / 8 + 1] = {0};
+		if (ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), ev_bits) < 0) {
+			close(fd);
+			continue;
+		}
+
+		if (!(ev_bits[EV_SW / 8] & (1 << (EV_SW % 8)))) {
+			close(fd);
+			continue;
+		}
+
+		// Check if device supports SW_TABLET_MODE switch
+		unsigned char sw_bits[SW_MAX / 8 + 1] = {0};
+		if (ioctl(fd, EVIOCGBIT(EV_SW, sizeof(sw_bits)), sw_bits) < 0) {
+			close(fd);
+			continue;
+		}
+
+		if (sw_bits[SW_TABLET_MODE / 8] & (1 << (SW_TABLET_MODE % 8))) {
+			char name[256] = {0};
+			ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+			dev->fd = fd;
+			snprintf(dev->event_name, sizeof(dev->event_name), "%s",
+					 event_name);
+			closedir(directory);
+			dbg("Found tablet switch: %s (%s)", name, event_name);
+			return 1;
+		}
+
+		close(fd);
+	}
+
+	closedir(directory);
+	return 0;
 }
