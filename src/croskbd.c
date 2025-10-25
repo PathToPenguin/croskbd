@@ -91,7 +91,7 @@ void input_loop(void) {
 	pfds[0].fd = kdev.fd;
 	pfds[0].events = POLLIN;
 
-	if (tdev.fd > 1) {
+	if (tdev.fd > 0) {
 		pfds[1].fd = tdev.fd;
 		pfds[1].events = POLLIN;
 		nfds++;
@@ -111,7 +111,7 @@ void input_loop(void) {
 			err("poll failed: %s", strerror(errno));
 			return;
 		}
-		if (pfds[1].revents) {
+		if (nfds > 1 && pfds[1].revents) {
 			read(tdev.fd, &ts_ev, sizeof(ts_ev));
 			// Process tablet switch events
 			if (settings.handle_tablet_switch && ts_ev.type == EV_SW &&
