@@ -91,9 +91,9 @@ The project uses a simple configuration file format (see `example.conf`):
 ```
 debug=true
 delete_key=true
-override_key_codes=true
+override_key_codes = true
 invert_top_row=false
-handle_tablet_switch=false
+handle_tablet_switch =false
 ```
 
 Configuration is parsed by `src/config.c` and affects runtime behavior.
